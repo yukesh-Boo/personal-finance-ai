@@ -1,0 +1,8 @@
+# Smart Personal Finance Tracker - Dependencies
+# Core system runs on standard library (Python 3.8+ with sqlite3, decimal, statistics, unittest).
+# The following optional packages enhance graphical interface and test reporting:
+
+matplotlib>=3.7.0
+customtkinter>=5.2.0
+pytest>=7.4.0
+pytest-cov>=4.1.0
