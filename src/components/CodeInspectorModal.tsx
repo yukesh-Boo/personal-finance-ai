@@ -21,6 +21,7 @@ export const CodeInspectorModal: React.FC<CodeInspectorModalProps> = ({
   const [files, setFiles] = useState<Record<string, string>>({});
   const [selectedFile, setSelectedFile] = useState<string>("finance_tracker.py");
   const [isLoading, setIsLoading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -50,8 +51,25 @@ export const CodeInspectorModal: React.FC<CodeInspectorModalProps> = ({
     });
   };
 
-  const handleDownloadZip = () => {
-    window.location.href = "/api/python/download-zip";
+  const handleDownloadZip = async () => {
+    try {
+      setIsDownloading(true);
+      const res = await fetch("/api/python/download-zip");
+      if (!res.ok) throw new Error("Failed to download project zip");
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = "smart_finance_tracker_python.zip";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
+    } catch (err: any) {
+      console.error("ZIP download error:", err);
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -79,11 +97,12 @@ export const CodeInspectorModal: React.FC<CodeInspectorModalProps> = ({
           <div className="flex items-center space-x-2">
             <button
               onClick={handleDownloadZip}
-              className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-white bg-slate-900 hover:bg-slate-800 transition-colors shadow-xs"
+              disabled={isDownloading}
+              className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-white bg-slate-900 hover:bg-slate-800 transition-colors shadow-xs disabled:opacity-50"
               title="Download standalone Python project ZIP"
             >
-              <Download className="w-3.5 h-3.5 mr-1.5 text-emerald-400" />
-              Download Python ZIP
+              <Download className={`w-3.5 h-3.5 mr-1.5 text-emerald-400 ${isDownloading ? "animate-spin" : ""}`} />
+              {isDownloading ? "Downloading..." : "Download Python ZIP"}
             </button>
             <button
               onClick={onClose}

@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from "react";
 import {
   FileText,
-  Download,
   Copy,
   Check,
   X,
   RefreshCw,
   FileSpreadsheet,
   Globe,
+  ExternalLink,
 } from "lucide-react";
 
 interface ReportModalProps {
@@ -17,17 +17,25 @@ interface ReportModalProps {
 
 export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose }) => {
   const [reportText, setReportText] = useState("");
+  const [htmlReport, setHtmlReport] = useState("");
+  const [activeView, setActiveView] = useState<"text" | "html">("text");
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setIsLoading(true);
-      fetch("/api/finance/report?format=text")
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success) {
-            setReportText(data.content);
+      Promise.all([
+        fetch("/api/finance/report?format=text").then((r) => r.json()),
+        fetch("/api/finance/report?format=html").then((r) => r.text()),
+      ])
+        .then(([textData, htmlData]) => {
+          if (textData && textData.success) {
+            setReportText(textData.content);
+          }
+          if (htmlData) {
+            setHtmlReport(htmlData);
           }
         })
         .catch(console.error)
@@ -42,19 +50,32 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose }) => 
     });
   };
 
-  const handleDownloadCsv = () => {
-    window.location.href = "/api/finance/report?format=csv";
-  };
-
-  const handleOpenHtmlReport = () => {
-    window.open("/api/finance/report?format=html", "_blank");
+  const handleDownloadCsv = async () => {
+    try {
+      setIsDownloading(true);
+      const res = await fetch("/api/finance/report?format=csv");
+      if (!res.ok) throw new Error("Failed to generate CSV");
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = "financial_transactions.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
+    } catch (err: any) {
+      console.error("CSV download error:", err);
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl border border-slate-200 flex flex-col h-[80vh]">
+      <div className="bg-white rounded-2xl max-w-4xl w-full p-6 shadow-2xl border border-slate-200 flex flex-col h-[85vh]">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
           <div className="flex items-center space-x-2.5">
@@ -78,53 +99,91 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose }) => 
           </button>
         </div>
 
-        {/* Action bar for downloads */}
+        {/* Action bar and Tab Switcher */}
         <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl mb-4">
-          <span className="text-xs font-semibold text-slate-700">
-            Export Formats:
-          </span>
           <div className="flex items-center space-x-2">
             <button
-              onClick={handleOpenHtmlReport}
-              className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 transition-colors shadow-2xs"
+              onClick={() => setActiveView("text")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeView === "text"
+                  ? "bg-slate-900 text-white shadow-xs"
+                  : "bg-white text-slate-700 hover:bg-slate-100 border border-slate-300"
+              }`}
             >
-              <Globe className="w-3.5 h-3.5 mr-1.5 text-blue-600" />
-              View Styled HTML Statement
+              <FileText className="w-3.5 h-3.5 inline mr-1" />
+              Audit Text Report
             </button>
+            <button
+              onClick={() => setActiveView("html")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                activeView === "html"
+                  ? "bg-slate-900 text-white shadow-xs"
+                  : "bg-white text-slate-700 hover:bg-slate-100 border border-slate-300"
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5 inline mr-1 text-blue-500" />
+              Styled Statement
+            </button>
+          </div>
+
+          <div className="flex items-center space-x-2">
             <button
               onClick={handleDownloadCsv}
-              className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 transition-colors shadow-2xs"
+              disabled={isDownloading}
+              className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 transition-colors shadow-2xs disabled:opacity-50"
             >
               <FileSpreadsheet className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
-              Download CSV Ledger
+              {isDownloading ? "Exporting..." : "Download CSV Ledger"}
             </button>
-            <button
-              onClick={handleCopy}
-              className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-white bg-slate-900 hover:bg-slate-800 transition-colors shadow-2xs"
+
+            <a
+              href="/api/finance/report.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 transition-colors shadow-2xs"
             >
-              {copied ? (
-                <>
-                  <Check className="w-3.5 h-3.5 mr-1 text-emerald-400" /> Copied Text
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5 mr-1" /> Copy Text
-                </>
-              )}
-            </button>
+              <ExternalLink className="w-3.5 h-3.5 mr-1.5 text-blue-600" />
+              Open in Tab
+            </a>
+
+            {activeView === "text" && (
+              <button
+                onClick={handleCopy}
+                className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-white bg-slate-900 hover:bg-slate-800 transition-colors shadow-2xs"
+              >
+                {copied ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 mr-1 text-emerald-400" /> Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 mr-1" /> Copy Text
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Report Preview */}
-        <div className="flex-1 bg-slate-900 rounded-xl p-4 overflow-auto border border-slate-800">
+        {/* Report Content View */}
+        <div className="flex-1 rounded-xl overflow-hidden border border-slate-200">
           {isLoading ? (
-            <div className="h-full flex items-center justify-center text-slate-400 text-xs">
+            <div className="h-full flex items-center justify-center text-slate-400 text-xs bg-slate-900">
               <RefreshCw className="w-4 h-4 animate-spin mr-2" /> Generating executive report...
             </div>
+          ) : activeView === "text" ? (
+            <div className="h-full bg-slate-900 p-4 overflow-auto">
+              <pre className="font-mono text-emerald-400 text-xs whitespace-pre leading-relaxed select-text">
+                {reportText}
+              </pre>
+            </div>
           ) : (
-            <pre className="font-mono text-emerald-400 text-xs whitespace-pre leading-relaxed select-text">
-              {reportText}
-            </pre>
+            <iframe
+              srcDoc={htmlReport}
+              title="Financial Statement"
+              className="w-full h-full border-0 bg-white"
+              sandbox="allow-same-origin allow-scripts"
+            />
           )}
         </div>
 

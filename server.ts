@@ -10,6 +10,22 @@ async function startServer() {
 
   app.use(express.json());
 
+  // CORS & Security headers for cross-origin iframes & cloud URLs
+  app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(200);
+    }
+    next();
+  });
+
+  // Handle favicon.ico to prevent 404 URL errors
+  app.get("/favicon.ico", (req, res) => {
+    res.status(204).end();
+  });
+
   // Helper to run python api_bridge
   const runPythonBridge = (action: string, payload: any = {}): Promise<any> => {
     return new Promise((resolve, reject) => {
@@ -103,10 +119,23 @@ async function startServer() {
     }
   });
 
-  // Delete Transaction
+  // Delete Transaction (supports POST and RESTful DELETE)
   app.post("/api/finance/delete-transaction", async (req, res) => {
     try {
       const result = await runPythonBridge("delete_transaction", req.body);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete("/api/finance/transactions/:id?", async (req, res) => {
+    try {
+      const id = req.params.id || req.body?.id || req.query?.id;
+      if (!id) {
+        return res.status(400).json({ success: false, error: "Transaction ID is required" });
+      }
+      const result = await runPythonBridge("delete_transaction", { id });
       res.json(result);
     } catch (err: any) {
       res.status(400).json({ success: false, error: err.message });
@@ -143,17 +172,20 @@ async function startServer() {
     }
   });
 
-  // Executive Report (Text, HTML, CSV)
-  app.get("/api/finance/report", async (req, res) => {
+  // Executive Report (Text, HTML, CSV) - supports query ?format= and direct extensions .html, .csv
+  app.get(["/api/finance/report", "/api/finance/report.html", "/api/finance/report.csv"], async (req, res) => {
     try {
-      const format = (req.query.format as string) || "text";
+      let format = (req.query.format as string) || "text";
+      if (req.path.endsWith(".html")) format = "html";
+      if (req.path.endsWith(".csv")) format = "csv";
+
       const result = await runPythonBridge("report", { format });
       if (format === "html") {
-        res.setHeader("Content-Type", "text/html");
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
         return res.send(result.content);
       }
       if (format === "csv") {
-        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", 'attachment; filename="transactions.csv"');
         return res.send(result.content);
       }

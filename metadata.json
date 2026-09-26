@@ -1,6 +1,6 @@
 {
   "name": "Smart Personal Finance Tracker",
-  "description": "Professional-grade personal finance tracker with advanced OOP architecture, dynamic budgeting, statistical analytics, automated reports, and interactive visualization.",
+  "description": "Personal finance tracker with budgeting, analytics, and automated reports.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

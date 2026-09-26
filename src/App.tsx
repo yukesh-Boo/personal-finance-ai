@@ -25,6 +25,19 @@ export default function App() {
   const [isTestRunnerOpen, setIsTestRunnerOpen] = useState(false);
   const [isCodeInspectorOpen, setIsCodeInspectorOpen] = useState(false);
   const [isReportOpen, setIsReportOpen] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    message: string;
+    confirmText?: string;
+    isDestructive?: boolean;
+    onConfirm: () => Promise<void> | void;
+  } | null>(null);
+  const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  const showToast = (type: "success" | "error", message: string) => {
+    setToast({ type, message });
+    setTimeout(() => setToast(null), 4000);
+  };
 
   const fetchDossierAndTransactions = useCallback(async () => {
     try {
@@ -79,18 +92,35 @@ export default function App() {
     await fetchDossierAndTransactions();
   };
 
-  const handleDeleteTransaction = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this transaction? Balance will be reconciled automatically.")) {
-      return;
-    }
-    const res = await fetch("/api/finance/delete-transaction", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
+  const handleDeleteTransaction = async (id: string): Promise<void> => {
+    return new Promise((resolve) => {
+      setConfirmDialog({
+        title: "Delete Transaction",
+        message: "Are you sure you want to delete this transaction? Account balances will be automatically recalculated and reconciled.",
+        confirmText: "Delete",
+        isDestructive: true,
+        onConfirm: async () => {
+          try {
+            const res = await fetch("/api/finance/delete-transaction", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id }),
+            });
+            const data = await res.json();
+            if (!data.success) {
+              showToast("error", data.error || "Failed to delete transaction");
+            } else {
+              showToast("success", "Transaction deleted and balance reconciled.");
+            }
+            await fetchDossierAndTransactions();
+          } catch (err: any) {
+            showToast("error", err.message || "Network error deleting transaction");
+          } finally {
+            resolve();
+          }
+        },
+      });
     });
-    const data = await res.json();
-    if (!data.success) alert(data.error || "Failed to delete transaction");
-    await fetchDossierAndTransactions();
   };
 
   const handleAddAccount = async (accountData: any) => {
@@ -101,6 +131,7 @@ export default function App() {
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.error || "Failed to create account");
+    showToast("success", `Account "${accountData.name}" created successfully.`);
     await fetchDossierAndTransactions();
   };
 
@@ -112,24 +143,31 @@ export default function App() {
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.error || "Failed to configure budget");
+    showToast("success", `Budget for ${budgetData.category} updated.`);
     await fetchDossierAndTransactions();
   };
 
-  const handleSeedData = async () => {
-    if (!confirm("Re-seed the SQLite database with multi-month realistic financial history?")) {
-      return;
-    }
-    setIsSeeding(true);
-    try {
-      const res = await fetch("/api/finance/seed", { method: "POST" });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Failed to seed sample data");
-      await fetchDossierAndTransactions();
-    } catch (err: any) {
-      alert(`Error seeding data: ${err.message}`);
-    } finally {
-      setIsSeeding(false);
-    }
+  const handleSeedData = () => {
+    setConfirmDialog({
+      title: "Re-Seed Financial Database",
+      message: "This will reset transactions and seed realistic multi-month data for Checking, Savings, and Cash accounts. Continue?",
+      confirmText: "Re-Seed Data",
+      isDestructive: false,
+      onConfirm: async () => {
+        setIsSeeding(true);
+        try {
+          const res = await fetch("/api/finance/seed", { method: "POST" });
+          const data = await res.json();
+          if (!data.success) throw new Error(data.error || "Failed to seed sample data");
+          showToast("success", "Sample database seeded with multi-month financial records!");
+          await fetchDossierAndTransactions();
+        } catch (err: any) {
+          showToast("error", `Error seeding data: ${err.message}`);
+        } finally {
+          setIsSeeding(false);
+        }
+      },
+    });
   };
 
   return (
@@ -252,6 +290,55 @@ export default function App() {
           isTransferModalOpen={isTransferOpen}
           setIsTransferModalOpen={setIsTransferOpen}
         />
+      )}
+
+      {/* Confirmation Dialog Modal */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
+            <h3 className="text-base font-bold text-slate-900 mb-2">
+              {confirmDialog.title}
+            </h3>
+            <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+              {confirmDialog.message}
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const action = confirmDialog.onConfirm;
+                  setConfirmDialog(null);
+                  await action();
+                }}
+                className={`px-4 py-2 text-xs font-semibold rounded-lg text-white transition-colors ${
+                  confirmDialog.isDestructive
+                    ? "bg-rose-600 hover:bg-rose-700 shadow-xs"
+                    : "bg-slate-900 hover:bg-slate-800 shadow-xs"
+                }`}
+              >
+                {confirmDialog.confirmText || "Confirm"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Toast Notification */}
+      {toast && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 flex items-center space-x-2.5 px-4 py-3 rounded-xl shadow-lg border text-xs font-medium transition-all transform animate-in fade-in slide-in-from-bottom-2 ${
+            toast.type === "error"
+              ? "bg-rose-50 border-rose-200 text-rose-800"
+              : "bg-emerald-50 border-emerald-200 text-emerald-800"
+          }`}
+        >
+          <span>{toast.message}</span>
+        </div>
       )}
 
       {/* Footer */}
