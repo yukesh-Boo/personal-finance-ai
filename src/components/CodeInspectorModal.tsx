@@ -8,6 +8,7 @@ import {
   X,
   RefreshCw,
 } from "lucide-react";
+import { apiGet } from "../utils/api";
 
 interface CodeInspectorModalProps {
   isOpen: boolean;
@@ -27,8 +28,7 @@ export const CodeInspectorModal: React.FC<CodeInspectorModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setIsLoading(true);
-      fetch("/api/python/source-code")
-        .then((res) => res.json())
+      apiGet("/api/python/source-code")
         .then((data) => {
           if (data.success && data.files) {
             setFiles(data.files);

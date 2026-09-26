@@ -9,6 +9,7 @@ import {
   Globe,
   ExternalLink,
 } from "lucide-react";
+import { apiGet } from "../utils/api";
 
 interface ReportModalProps {
   isOpen: boolean;
@@ -27,7 +28,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ isOpen, onClose }) => 
     if (isOpen) {
       setIsLoading(true);
       Promise.all([
-        fetch("/api/finance/report?format=text").then((r) => r.json()),
+        apiGet("/api/finance/report?format=text"),
         fetch("/api/finance/report?format=html").then((r) => r.text()),
       ])
         .then(([textData, htmlData]) => {

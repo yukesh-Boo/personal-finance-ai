@@ -12,6 +12,8 @@ import {
   RefreshCw,
 } from "lucide-react";
 
+import { apiPost } from "../utils/api";
+
 interface TestRunnerModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -31,8 +33,7 @@ export const TestRunnerModal: React.FC<TestRunnerModalProps> = ({
   const runTests = async () => {
     setIsRunning(true);
     try {
-      const res = await fetch("/api/python/run-tests", { method: "POST" });
-      const data = await res.json();
+      const data = await apiPost("/api/python/run-tests");
       setTestResult({
         passed: data.passed,
         durationMs: data.durationMs,

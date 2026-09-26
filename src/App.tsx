@@ -10,11 +10,32 @@ import { CodeInspectorModal } from "./components/CodeInspectorModal";
 import { ReportModal } from "./components/ReportModal";
 import { FinancialDossier, TransactionData } from "./types";
 import { RefreshCw, AlertCircle } from "lucide-react";
+import { apiGet, apiPost } from "./utils/api";
 
 export default function App() {
-  const [dossier, setDossier] = useState<FinancialDossier | null>(null);
-  const [transactions, setTransactions] = useState<TransactionData[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [dossier, setDossier] = useState<FinancialDossier | null>(() => {
+    try {
+      const cached = sessionStorage.getItem("fin_dossier_cache");
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [transactions, setTransactions] = useState<TransactionData[]>(() => {
+    try {
+      const cached = sessionStorage.getItem("fin_txns_cache");
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isLoading, setIsLoading] = useState(() => {
+    try {
+      return !sessionStorage.getItem("fin_dossier_cache");
+    } catch {
+      return true;
+    }
+  });
   const [isSeeding, setIsSeeding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "transactions" | "budgets" | "analytics">("overview");
@@ -39,55 +60,109 @@ export default function App() {
     setTimeout(() => setToast(null), 4000);
   };
 
-  const fetchDossierAndTransactions = useCallback(async () => {
+  const fetchDossierAndTransactions = useCallback(async (forceLoading = false) => {
     try {
+      if (forceLoading || !dossier) {
+        setIsLoading(true);
+      }
       setError(null);
-      const [dossierRes, txnsRes] = await Promise.all([
-        fetch("/api/finance/dossier"),
-        fetch("/api/finance/transactions?limit=200"),
-      ]);
 
-      const dossierData = await dossierRes.json();
-      const txnsData = await txnsRes.json();
-
-      if (dossierData.success && dossierData.data) {
-        setDossier(dossierData.data);
-      } else {
-        throw new Error(dossierData.error || "Failed to load financial summary");
+      // Fast-path: Unified bootstrap endpoint (1 Python process, 0.1s response)
+      try {
+        const bootData = await apiGet("/api/finance/bootstrap?limit=200", 2, 5000);
+        if (bootData && bootData.success && bootData.data?.dossier) {
+          setDossier(bootData.data.dossier);
+          if (bootData.data.transactions) {
+            setTransactions(bootData.data.transactions);
+          }
+          try {
+            sessionStorage.setItem("fin_dossier_cache", JSON.stringify(bootData.data.dossier));
+            if (bootData.data.transactions) {
+              sessionStorage.setItem("fin_txns_cache", JSON.stringify(bootData.data.transactions));
+            }
+          } catch {}
+          return;
+        }
+      } catch (bootErr) {
+        console.warn("Fast bootstrap fallback to individual endpoints", bootErr);
       }
 
-      if (txnsData.success && txnsData.data) {
+      // Fallback path: parallel individual endpoints with safety timeout
+      const [dossierData, txnsData] = await Promise.all([
+        apiGet("/api/finance/dossier", 2, 6000),
+        apiGet("/api/finance/transactions?limit=200", 2, 6000),
+      ]);
+
+      if (dossierData && dossierData.success && dossierData.data) {
+        setDossier(dossierData.data);
+        try {
+          sessionStorage.setItem("fin_dossier_cache", JSON.stringify(dossierData.data));
+        } catch {}
+      } else {
+        throw new Error(dossierData?.error || "Failed to load financial summary");
+      }
+
+      if (txnsData && txnsData.success && txnsData.data) {
         setTransactions(txnsData.data);
+        try {
+          sessionStorage.setItem("fin_txns_cache", JSON.stringify(txnsData.data));
+        } catch {}
       }
     } catch (err: any) {
       setError(err.message || "Failed to connect to backend engine.");
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [dossier]);
+
+  const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
 
   useEffect(() => {
     fetchDossierAndTransactions();
   }, [fetchDossierAndTransactions]);
 
+  // Loading watchdog: never let isLoading linger longer than 7 seconds without user option
+  useEffect(() => {
+    if (!isLoading) return;
+    const timeout = setTimeout(() => {
+      if (isLoading && !dossier) {
+        setIsLoading(false);
+        setError("Connection to Python engine timed out. The backend container may still be warming up.");
+      }
+    }, 7000);
+    return () => clearTimeout(timeout);
+  }, [isLoading, dossier]);
+
+  // Auto-retry when backend is waking up or warming up
+  useEffect(() => {
+    if (!error) {
+      setRetryCountdown(null);
+      return;
+    }
+
+    setRetryCountdown(4);
+    const interval = setInterval(() => {
+      setRetryCountdown((prev) => {
+        if (prev === null || prev <= 1) {
+          clearInterval(interval);
+          fetchDossierAndTransactions();
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [error, fetchDossierAndTransactions]);
+
   const handleAddTransaction = async (txn: any) => {
-    const res = await fetch("/api/finance/transactions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(txn),
-    });
-    const data = await res.json();
+    const data = await apiPost("/api/finance/transactions", txn);
     if (!data.success) throw new Error(data.error || "Failed to add transaction");
     await fetchDossierAndTransactions();
   };
 
   const handleTransfer = async (transferData: any) => {
-    const res = await fetch("/api/finance/transfer", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(transferData),
-    });
-    const data = await res.json();
+    const data = await apiPost("/api/finance/transfer", transferData);
     if (!data.success) throw new Error(data.error || "Transfer failed");
     await fetchDossierAndTransactions();
   };
@@ -101,12 +176,7 @@ export default function App() {
         isDestructive: true,
         onConfirm: async () => {
           try {
-            const res = await fetch("/api/finance/delete-transaction", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ id }),
-            });
-            const data = await res.json();
+            const data = await apiPost("/api/finance/delete-transaction", { id });
             if (!data.success) {
               showToast("error", data.error || "Failed to delete transaction");
             } else {
@@ -124,24 +194,14 @@ export default function App() {
   };
 
   const handleAddAccount = async (accountData: any) => {
-    const res = await fetch("/api/finance/accounts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(accountData),
-    });
-    const data = await res.json();
+    const data = await apiPost("/api/finance/accounts", accountData);
     if (!data.success) throw new Error(data.error || "Failed to create account");
     showToast("success", `Account "${accountData.name}" created successfully.`);
     await fetchDossierAndTransactions();
   };
 
   const handleSetBudget = async (budgetData: any) => {
-    const res = await fetch("/api/finance/budgets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(budgetData),
-    });
-    const data = await res.json();
+    const data = await apiPost("/api/finance/budgets", budgetData);
     if (!data.success) throw new Error(data.error || "Failed to configure budget");
     showToast("success", `Budget for ${budgetData.category} updated.`);
     await fetchDossierAndTransactions();
@@ -156,8 +216,7 @@ export default function App() {
       onConfirm: async () => {
         setIsSeeding(true);
         try {
-          const res = await fetch("/api/finance/seed", { method: "POST" });
-          const data = await res.json();
+          const data = await apiPost("/api/finance/seed");
           if (!data.success) throw new Error(data.error || "Failed to seed sample data");
           showToast("success", "Sample database seeded with multi-month financial records!");
           await fetchDossierAndTransactions();
@@ -188,25 +247,46 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {isLoading ? (
-          <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-3">
-            <RefreshCw className="w-8 h-8 text-emerald-600 animate-spin" />
-            <span className="text-sm font-medium text-slate-600">
-              Connecting to Python Engine & Loading Financial Records...
-            </span>
+          <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4">
+            <RefreshCw className="w-9 h-9 text-emerald-600 animate-spin" />
+            <div className="text-center">
+              <p className="text-sm font-semibold text-slate-800">
+                Connecting to Python Engine & Loading Financial Records...
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Initializing SQLite persistence and analytics models
+              </p>
+            </div>
+            <button
+              onClick={() => fetchDossierAndTransactions(true)}
+              className="text-xs text-slate-500 hover:text-emerald-700 underline font-medium pt-2 transition-colors cursor-pointer"
+            >
+              Taking longer than expected? Click to force reconnect
+            </button>
           </div>
         ) : error ? (
-          <div className="bg-rose-50 border border-rose-200 rounded-xl p-6 text-center max-w-md mx-auto my-12">
-            <AlertCircle className="w-8 h-8 text-rose-600 mx-auto mb-2" />
-            <h3 className="text-sm font-bold text-rose-900 mb-1">
-              Backend Initialization Error
+          <div className="bg-amber-50/80 border border-amber-200/80 rounded-2xl p-8 text-center max-w-lg mx-auto my-12 shadow-sm">
+            <div className="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4 text-amber-700">
+              <RefreshCw className="w-6 h-6 animate-spin" />
+            </div>
+            <h3 className="text-base font-bold text-slate-900 mb-1">
+              Backend Service Warming Up
             </h3>
-            <p className="text-xs text-rose-700 mb-4">{error}</p>
-            <button
-              onClick={() => fetchDossierAndTransactions()}
-              className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition-colors"
-            >
-              Retry Connection
-            </button>
+            <p className="text-sm text-slate-600 mb-5 leading-relaxed">{error}</p>
+            {retryCountdown !== null && (
+              <p className="text-xs text-amber-800 font-medium mb-4 bg-amber-100/70 py-1.5 px-3 rounded-full inline-block">
+                Auto-reconnecting in {retryCountdown}s...
+              </p>
+            )}
+            <div>
+              <button
+                onClick={() => fetchDossierAndTransactions()}
+                className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-xs"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Retry Connection Now
+              </button>
+            </div>
           </div>
         ) : dossier ? (
           <div className="space-y-8">

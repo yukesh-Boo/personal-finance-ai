@@ -29,7 +29,12 @@ def main():
             payload = {}
 
     try:
-        if action == "dossier":
+        if action == "bootstrap":
+            dossier = tracker.get_analytics_dossier()
+            txns = tracker.get_transactions(limit=payload.get("limit", 200))
+            print(json.dumps({"success": True, "data": {"dossier": dossier, "transactions": txns}}))
+
+        elif action == "dossier":
             dossier = tracker.get_analytics_dossier()
             print(json.dumps({"success": True, "data": dossier}))
 

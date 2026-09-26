@@ -26,12 +26,22 @@ async function startServer() {
     res.status(204).end();
   });
 
-  // Helper to run python api_bridge
+  // Helper to run python api_bridge with safety timeout
   const runPythonBridge = (action: string, payload: any = {}): Promise<any> => {
     return new Promise((resolve, reject) => {
+      let isSettled = false;
       const payloadStr = JSON.stringify(payload);
-      // Spawn python3 api_bridge.py <action> finance_tracker.db '<payloadStr>'
       const pyProcess = spawn("python3", ["api_bridge.py", action, "finance_tracker.db", payloadStr]);
+
+      const timer = setTimeout(() => {
+        if (!isSettled) {
+          isSettled = true;
+          try {
+            pyProcess.kill("SIGKILL");
+          } catch {}
+          reject(new Error(`Python bridge timed out on action '${action}'`));
+        }
+      }, 10000);
 
       let stdout = "";
       let stderr = "";
@@ -44,7 +54,19 @@ async function startServer() {
         stderr += data.toString();
       });
 
+      pyProcess.on("error", (err) => {
+        if (!isSettled) {
+          isSettled = true;
+          clearTimeout(timer);
+          reject(err);
+        }
+      });
+
       pyProcess.on("close", (code) => {
+        if (isSettled) return;
+        isSettled = true;
+        clearTimeout(timer);
+
         if (code !== 0) {
           try {
             const errObj = JSON.parse(stdout);
@@ -68,6 +90,17 @@ async function startServer() {
   // Health
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // Fast Combined Bootstrap (Dossier + Transactions in single Python execution)
+  app.get("/api/finance/bootstrap", async (req, res) => {
+    try {
+      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 200;
+      const result = await runPythonBridge("bootstrap", { limit });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
   });
 
   // Financial Dossier (Summary, Accounts, Budgets, Velocity, Forecast, Health Score)
